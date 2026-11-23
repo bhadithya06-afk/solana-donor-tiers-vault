@@ -59,6 +59,7 @@ pub fn donate(ctx: Context<Donate>, amount: u64, message: String) -> Result<()> 
 
     let donor_record = &mut ctx.accounts.donor_record;
     if donor_record.donation_count == 0 {
+        donor_record.donor = ctx.accounts.donor.key();
         let vault = &mut ctx.accounts.vault;
         vault.unique_donor_count = vault
             .unique_donor_count
@@ -76,7 +77,6 @@ pub fn donate(ctx: Context<Donate>, amount: u64, message: String) -> Result<()> 
         .ok_or(DonorVaultError::Overflow)?;
 
     let donation = &mut ctx.accounts.donation;
-    donation.donor = ctx.accounts.donor.key();
     donation.amount = amount;
     donation.message = message;
     donation.timestamp = Clock::get()?.unix_timestamp;

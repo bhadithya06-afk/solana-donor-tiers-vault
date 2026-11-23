@@ -5,7 +5,6 @@ use crate::constants::MAX_MESSAGE_LEN;
 #[account]
 #[derive(InitSpace)]
 pub struct Donation {
-    pub donor: Pubkey,
     pub amount: u64,
     #[max_len(MAX_MESSAGE_LEN)]
     pub message: String,
