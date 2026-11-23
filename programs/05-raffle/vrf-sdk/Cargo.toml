@@ -1,0 +1,12 @@
+[package]
+name = "ephemeral-vrf-sdk"
+version = "0.3.0"
+edition = "2021"
+
+[features]
+default = []
+anchor-compat = []
+
+[dependencies]
+anchor-lang = "0.31.1"
+ephemeral-vrf-sdk-vrf-macro = { path = "macro" }
