@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -20,6 +22,13 @@ import {
   numToHex,
 } from "../helpers";
 import { setupRaffle, fulfillRandomness, RaffleFixture } from "./fixture";
+
+const VRF_PROGRAM_ID = new PublicKey(
+  "Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz",
+);
+const BPF_LOADER_2 = new PublicKey(
+  "BPFLoader2111111111111111111111111111111111",
+);
 
 describe("05-raffle", () => {
   let env: RaffleFixture;
@@ -45,6 +54,24 @@ describe("05-raffle", () => {
 
   before(async () => {
     env = await setupRaffle();
+
+    // Deploy the no-op mock VRF SBF binary at VRF_PROGRAM_ID so `request_randomness`
+    // can execute its CPI end-to-end inside bankrun.
+    const soPath = path.resolve("target/deploy/mock_vrf.so");
+    if (!fs.existsSync(soPath)) {
+      const { execSync } = await import("child_process");
+      execSync(
+        "cargo-build-sbf --manifest-path programs/05-raffle/mock-vrf/Cargo.toml --sbf-out-dir target/deploy",
+        { stdio: "inherit" },
+      );
+    }
+    const mockVrfSo = fs.readFileSync(soPath);
+    env.context.setAccount(VRF_PROGRAM_ID, {
+      lamports: 1_000_000_000,
+      data: mockVrfSo,
+      owner: BPF_LOADER_2,
+      executable: true,
+    });
   });
 
   it("initializes the raffle and rejects early or empty randomness requests", async () => {
@@ -215,9 +242,38 @@ describe("05-raffle", () => {
     );
   });
 
-  it("draws a weighted winner who takes the whole pot and blocks losers and double claims", async () => {
-    const { context, program, mint, funded, randomness } = env;
+  it("requests randomness once after deadline, fulfills VRF, pays the weighted winner, and blocks losers and double claims", async () => {
+    const { context, program, payer, mint, funded, randomness } = env;
 
+    // 1. Explicitly invoke request_randomness after draw_time has passed
+    const reqIx = await program.methods
+      .requestRandomness()
+      .accountsPartial({
+        payer: payer.publicKey,
+        raffle: rafflePda(),
+        randomness,
+      })
+      .instruction();
+    await sendIxs(context, [payer], reqIx);
+
+    const raffleAfterReq = await program.account.raffle.fetch(rafflePda());
+    assert.isTrue(raffleAfterReq.randomnessRequested);
+
+    // 6006 = RandomnessAlreadyRequested (single-use guard on request_randomness)
+    const duplicateReqIx = await program.methods
+      .requestRandomness()
+      .accountsPartial({
+        payer: payer.publicKey,
+        raffle: rafflePda(),
+        randomness,
+      })
+      .instruction();
+    await expectReverted(
+      { revertedWith: { message: numToHex(6006) } },
+      sendIxs(context, [payer], duplicateReqIx),
+    );
+
+    // 2. Fulfill randomness via the trusted oracle callback
     const randomBytes = Array.from({ length: 32 }, (_, i) => i + 7);
     await fulfillRandomness(env, randomBytes);
 
@@ -244,7 +300,7 @@ describe("05-raffle", () => {
     }
     assert.notEqual(winningIndex, -1, "must find a valid winning entry");
 
-    // Non-winning entry must fail with 6008 = NotWinner
+    // 3. Non-winning entry must fail with 6008 = NotWinner
     const losingIndex = (winningIndex + 1) % 3;
     const loser = funded[losingIndex];
     const loserAta = getAssociatedTokenAddressSync(mint, loser.publicKey);
@@ -263,7 +319,7 @@ describe("05-raffle", () => {
       sendIxs(context, [loser], loserClaimIx),
     );
 
-    // Winner claims the entire pot
+    // 4. Winner claims the entire pot
     const winner = funded[winningIndex];
     const winnerAta = getAssociatedTokenAddressSync(mint, winner.publicKey);
     const beforeAcc = await context.banksClient.getAccount(winnerAta);
@@ -292,7 +348,7 @@ describe("05-raffle", () => {
     const vaultBalance = AccountLayout.decode(vaultAcc!.data).amount;
     assert.equal(vaultBalance.toString(), "0");
 
-    // 6009 = AlreadyClaimed
+    // 5. 6009 = AlreadyClaimed
     await expectReverted(
       { revertedWith: { message: numToHex(6009) } },
       sendIxs(context, [winner], winClaimIx),
