@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::native_token::LAMPORTS_PER_SOL;
 
 /// Loyalty tier of a donor. The variant order is the on-chain/return encoding —
 /// don't change it.
@@ -12,9 +13,21 @@ pub enum Tier {
 }
 
 impl Tier {
-    // TODO: map a cumulative total (in lamports) to a tier. The boundaries are
-    // in TASK.md — mind which edges are inclusive vs exclusive.
-    pub fn from_total(_total: u64) -> Self {
-        todo!()
+    pub fn from_total(total: u64) -> Self {
+        const SILVER_MIN: u64 = LAMPORTS_PER_SOL / 10; // 0.1 SOL
+        const GOLD_MIN: u64 = LAMPORTS_PER_SOL;          // 1 SOL
+        const PLATINUM_MIN: u64 = 10 * LAMPORTS_PER_SOL; // 10 SOL
+
+        if total == 0 {
+            Tier::None
+        } else if total < SILVER_MIN {
+            Tier::Bronze
+        } else if total < GOLD_MIN {
+            Tier::Silver
+        } else if total < PLATINUM_MIN {
+            Tier::Gold
+        } else {
+            Tier::Platinum
+        }
     }
 }
